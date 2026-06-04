@@ -1,78 +1,190 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, ScanText, KeyRound, ShieldCheck, AlertCircle, RefreshCw, Settings2 } from 'lucide-react';
-
-export default function App() {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>凱薩密文掃描器</title>
   
-  const [tesseractReady, setTesseractReady] = useState(false);
-  const [stream, setStream] = useState(null);
-  const [isScanning, setIsScanning] = useState(false);
-  const [cameraError, setCameraError] = useState('');
+  <!-- 引入 Tailwind CSS 進行快速排版 -->
+  <script src="https://cdn.tailwindcss.com"></script>
   
-  const [cipherText, setCipherText] = useState('');
-  const [shiftKey, setShiftKey] = useState(0);
-  const [plainText, setPlainText] = useState('');
+  <!-- 引入 Tesseract.js (OCR 引擎) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
-  // 1. 動態載入 Tesseract.js
-  useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-    script.async = true;
-    script.onload = () => setTesseractReady(true);
-    script.onerror = () => setCameraError('無法載入 OCR 引擎，請檢查網路連線。');
-    document.body.appendChild(script);
+  <style>
+    /* 隱藏預設滾動條保持畫面乾淨 */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-800 p-4 font-sans selection:bg-indigo-200">
 
-    return () => {
-      if (document.body.contains(script)) {
-        document.body.removeChild(script);
-      }
-    };
-  }, []);
+  <div class="max-w-md mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 pb-6">
+    
+    <!-- 標題列 -->
+    <div class="bg-slate-800 p-5 text-white flex items-center justify-between shadow-md relative z-10">
+      <div class="flex items-center space-x-3">
+        <div class="bg-indigo-500 p-2 rounded-lg">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/>
+          </svg>
+        </div>
+        <h1 class="text-xl font-bold tracking-wider">凱薩密文掃描器</h1>
+      </div>
+      <button onclick="startCamera()" class="p-2 hover:bg-slate-700 rounded-full transition" title="重新啟動相機">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+        </svg>
+      </button>
+    </div>
 
-  // 2. 初始化相機 (請求高畫質)
-  const startCamera = useCallback(async () => {
-    setCameraError('');
-    try {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+    <div class="p-5 space-y-6">
+      
+      <!-- 提示訊息 -->
+      <div class="bg-indigo-50 text-indigo-800 p-3.5 rounded-xl text-sm flex items-start space-x-3 border border-indigo-100">
+        <svg class="w-5 h-5 shrink-0 mt-0.5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="7" r="3"/><circle cx="7" cy="17" r="3"/>
+        </svg>
+        <p class="leading-relaxed">系統已啟用<strong>高對比強化技術</strong>。請對準密文，程式將自動過濾背景雜訊並萃取 <code>(Key=數字)</code> 格式的金鑰。</p>
+      </div>
+
+      <!-- 相機預覽區 -->
+      <div class="relative rounded-xl overflow-hidden bg-black aspect-[4/3] flex items-center justify-center shadow-inner ring-1 ring-black/5">
+        
+        <div id="cameraError" class="hidden text-red-400 text-sm p-4 text-center z-20 absolute bg-black/80 rounded"></div>
+        
+        <video id="videoElement" autoplay playsinline muted class="w-full h-full object-cover"></video>
+        
+        <!-- 掃描框 UI 裝飾 -->
+        <div class="absolute inset-0 pointer-events-none border border-white/30 m-8 rounded-lg shadow-[0_0_0_4000px_rgba(0,0,0,0.4)] z-10">
+          <div class="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 -ml-1 -mt-1 rounded-tl"></div>
+          <div class="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 -mr-1 -mt-1 rounded-tr"></div>
+          <div class="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 -ml-1 -mb-1 rounded-bl"></div>
+          <div class="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 -mr-1 -mb-1 rounded-br"></div>
+        </div>
+        
+        <!-- 隱藏的 Canvas 用於擷取與影像處理 -->
+        <canvas id="canvasElement" class="hidden"></canvas>
+      </div>
+
+      <!-- 掃描按鈕 -->
+      <button id="scanBtn" onclick="captureAndScan()" class="w-full py-4 rounded-xl flex items-center justify-center space-x-2 text-lg font-bold transition-all shadow-md bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg active:scale-95">
+        
+        <span id="scanBtnNormal" class="flex items-center space-x-2">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>
+          </svg>
+          <span>掃描並解密</span>
+        </span>
+
+        <span id="scanBtnLoading" class="hidden flex items-center space-x-2">
+          <svg class="w-6 h-6 animate-spin" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+          <span>影像強化與辨識中...</span>
+        </span>
+
+      </button>
+
+      <!-- 結果與即時編輯區 -->
+      <div class="space-y-5 pt-2">
+        
+        <!-- 金鑰輸入 -->
+        <div>
+          <label class="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1.5 ml-1">
+            <svg class="w-4 h-4 text-indigo-500" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>
+            </svg>
+            <span>偏移金鑰 (Shift Key)</span>
+          </label>
+          <div class="relative">
+            <input type="number" id="shiftInput" value="0" class="w-full p-3.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition font-mono text-lg shadow-sm" placeholder="例如: 11" />
+          </div>
+        </div>
+
+        <!-- 掃描到的密文 -->
+        <div>
+          <label class="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1.5 ml-1">
+            <svg class="w-4 h-4 text-amber-500" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/>
+            </svg>
+            <span>辨識密文 (Ciphertext) - 可手動修正</span>
+          </label>
+          <textarea id="cipherInput" class="w-full p-3.5 bg-amber-50/50 border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition h-28 resize-none font-mono text-sm leading-relaxed shadow-sm text-gray-700" placeholder="此處將顯示辨識出的密文..."></textarea>
+        </div>
+
+        <!-- 解密後的明文 -->
+        <div class="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm relative overflow-hidden">
+          <div class="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+          <label class="flex items-center space-x-2 text-sm font-bold text-emerald-800 mb-3 ml-1">
+            <svg class="w-5 h-5 text-emerald-600" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>
+            </svg>
+            <span>解密明文 (Plaintext)</span>
+          </label>
+          <div id="plainTextOutput" class="min-h-[4rem] font-mono text-emerald-950 whitespace-pre-wrap break-words text-lg leading-relaxed ml-1">
+            <span class="text-emerald-600/40 italic text-base">等待掃描或輸入解密...</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 取得 DOM 元素
+    const videoElement = document.getElementById('videoElement');
+    const canvasElement = document.getElementById('canvasElement');
+    const cameraError = document.getElementById('cameraError');
+    const scanBtn = document.getElementById('scanBtn');
+    const scanBtnNormal = document.getElementById('scanBtnNormal');
+    const scanBtnLoading = document.getElementById('scanBtnLoading');
+    const shiftInput = document.getElementById('shiftInput');
+    const cipherInput = document.getElementById('cipherInput');
+    const plainTextOutput = document.getElementById('plainTextOutput');
+
+    let localStream = null;
+
+    // 啟動相機
+    async function startCamera() {
+      cameraError.classList.add('hidden');
+      try {
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+        }
+        // 請求高解析度影像
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { 
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          } 
+        });
+        localStream = stream;
+        videoElement.srcObject = stream;
+      } catch (err) {
+        console.error("相機存取錯誤:", err);
+        cameraError.innerText = '無法存取相機，請確認已給予權限。';
+        cameraError.classList.remove('hidden');
       }
-      // 請求高解析度影像，有助於辨識像素字體與細節
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        } 
-      });
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
-    } catch (err) {
-      console.error("相機存取錯誤:", err);
-      setCameraError('無法存取相機，請確認已給予權限。');
     }
-  }, [stream]);
 
-  useEffect(() => {
-    startCamera();
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+    // 更新解密結果
+    function updateDecryption() {
+      const text = cipherInput.value;
+      const shift = parseInt(shiftInput.value) || 0;
+      
+      if (!text) {
+        plainTextOutput.innerHTML = '<span class="text-emerald-600/40 italic text-base">等待掃描或輸入解密...</span>';
+        return;
       }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // 3. 凱薩密碼解密邏輯 (即時更新)
-  useEffect(() => {
-    const decrypt = (text, shift) => {
-      if (!text) return '';
-      // 將 shift 限制在 0-25 之間，解密通常是減去偏移量
+      // 將 shift 限制在 0-25 之間
       const s = ((shift % 26) + 26) % 26; 
       
-      return text.split('').map(char => {
+      const decrypted = text.split('').map(char => {
         const code = char.charCodeAt(0);
         // 大寫字母 A-Z (65-90)
         if (code >= 65 && code <= 90) {
@@ -82,208 +194,89 @@ export default function App() {
         else if (code >= 97 && code <= 122) {
           return String.fromCharCode(((code - 97 - s + 26) % 26) + 97);
         }
-        return char; // 非英文字母不轉換 (保留標點符號)
+        return char; // 非英文字母不轉換
       }).join('');
-    };
 
-    setPlainText(decrypt(cipherText, shiftKey));
-  }, [cipherText, shiftKey]);
-
-  // 4. 捕捉影像、預處理並進行 OCR
-  const captureAndScan = async () => {
-    if (!videoRef.current || !canvasRef.current || !tesseractReady) return;
-    
-    setIsScanning(true);
-    
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    
-    // 使用影片的實際高解析度作為 Canvas 尺寸
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    
-    const ctx = canvas.getContext('2d');
-    
-    // 【核心優化】影像預處理濾鏡
-    // 套用灰階、超高對比度、些微提高亮度。這能消除背景雜訊(如素描紋理)並強化文字邊緣
-    ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // 重設濾鏡以免影響後續操作
-    ctx.filter = 'none';
-    
-    const imageDataUrl = canvas.toDataURL('image/png');
-
-    try {
-      const result = await window.Tesseract.recognize(
-        imageDataUrl,
-        'eng',
-        { 
-          logger: m => {
-            if(m.status === 'recognizing text') {
-               // 可在此處獲取進度 m.progress
-            }
-          }
-        }
-      );
-
-      let text = result.data.text;
-      
-      // 【核心優化】嘗試從文字中找出金鑰，支援 (Key=11), KEY: 5, k=3 等格式
-      // 正規表達式解析: 允許開頭有括號，配對 key 或 k，接著冒號或等號，最後抓取數字，允許結尾括號
-      const keyMatch = text.match(/[\(]?(?:key|k)\s*[:=]\s*(-?\d+)[\)]?/i);
-      
-      if (keyMatch) {
-        setShiftKey(parseInt(keyMatch[1], 10));
-        // 將包含金鑰的整段文字移除
-        text = text.replace(keyMatch[0], '');
-      }
-      
-      // 【核心優化】清理 OCR 常見的排版雜訊
-      // 將換行符號取代為空白，並移除多餘的連續空白，讓句子連續
-      text = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-      
-      setCipherText(text);
-
-    } catch (error) {
-      console.error("OCR 錯誤:", error);
-      alert("文字辨識失敗，請再試一次。");
-    } finally {
-      setIsScanning(false);
+      plainTextOutput.innerText = decrypted;
     }
-  };
 
-  return (
-    <div className="min-h-screen bg-gray-50 text-gray-800 p-4 font-sans">
-      <div className="max-w-md mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
+    // 綁定輸入事件（即時更新）
+    shiftInput.addEventListener('input', updateDecryption);
+    cipherInput.addEventListener('input', updateDecryption);
+
+    // 按鈕狀態切換
+    function setScanningState(isScanning) {
+      if (isScanning) {
+        scanBtn.disabled = true;
+        scanBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700', 'active:scale-95');
+        scanBtn.classList.add('bg-gray-200', 'text-gray-500', 'cursor-not-allowed');
+        scanBtnNormal.classList.add('hidden');
+        scanBtnLoading.classList.remove('hidden');
+      } else {
+        scanBtn.disabled = false;
+        scanBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700', 'active:scale-95');
+        scanBtn.classList.remove('bg-gray-200', 'text-gray-500', 'cursor-not-allowed');
+        scanBtnNormal.classList.remove('hidden');
+        scanBtnLoading.classList.add('hidden');
+      }
+    }
+
+    // 捕捉影像並進行 OCR
+    async function captureAndScan() {
+      if (!window.Tesseract) {
+        alert("OCR 引擎尚未載入完成，請稍後再試。");
+        return;
+      }
+
+      setScanningState(true);
+      
+      // 使用影片的高解析度作為 Canvas 尺寸
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+      
+      const ctx = canvasElement.getContext('2d');
+      
+      // 【核心優化】影像預處理濾鏡 (高對比、灰階)
+      ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
+      ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+      ctx.filter = 'none'; // 重設濾鏡
+      
+      const imageDataUrl = canvasElement.toDataURL('image/png');
+
+      try {
+        const result = await window.Tesseract.recognize(
+          imageDataUrl,
+          'eng',
+          { logger: m => console.log(m) }
+        );
+
+        let text = result.data.text;
         
-        {/* Header */}
-        <div className="bg-slate-800 p-5 text-white flex items-center justify-between shadow-md relative z-10">
-          <div className="flex items-center space-x-3">
-            <div className="bg-indigo-500 p-2 rounded-lg">
-              <ScanText className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-xl font-bold tracking-wider">凱薩密文掃描器</h1>
-          </div>
-          <button onClick={startCamera} className="p-2 hover:bg-slate-700 rounded-full transition" title="重新啟動相機">
-            <RefreshCw className="w-5 h-5" />
-          </button>
-        </div>
+        // 【核心優化】擷取金鑰，支援 (Key=11)
+        const keyMatch = text.match(/[\(]?(?:key|k)\s*[:=]\s*(-?\d+)[\)]?/i);
+        if (keyMatch) {
+          shiftInput.value = parseInt(keyMatch[1], 10);
+          text = text.replace(keyMatch[0], ''); // 移除金鑰文字
+        }
+        
+        // 【核心優化】清理排版雜訊
+        text = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        
+        cipherInput.value = text;
+        updateDecryption(); // 觸發解密
 
-        <div className="p-5 space-y-6">
-          
-          {/* 提示訊息 */}
-          <div className="bg-indigo-50 text-indigo-800 p-3.5 rounded-xl text-sm flex items-start space-x-3 border border-indigo-100">
-            <Settings2 className="w-5 h-5 shrink-0 mt-0.5 text-indigo-600" />
-            <p className="leading-relaxed">系統已啟用<strong>高對比強化技術</strong>。請對準密文，程式將自動過濾背景雜訊並萃取 `(Key=數字)` 格式的金鑰。</p>
-          </div>
+      } catch (error) {
+        console.error("OCR 錯誤:", error);
+        alert("文字辨識失敗，請再試一次。");
+      } finally {
+        setScanningState(false);
+      }
+    }
 
-          {/* 相機預覽區 */}
-          <div className="relative rounded-xl overflow-hidden bg-black aspect-[4/3] flex items-center justify-center shadow-inner ring-1 ring-black/5">
-            {cameraError ? (
-              <div className="text-red-400 text-sm p-4 text-center">{cameraError}</div>
-            ) : (
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted
-                className="w-full h-full object-cover"
-              />
-            )}
-            
-            {/* 掃描框 UI 裝飾 */}
-            <div className="absolute inset-0 pointer-events-none border border-white/30 m-8 rounded-lg shadow-[0_0_0_4000px_rgba(0,0,0,0.4)]">
-              <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 -ml-1 -mt-1 rounded-tl"></div>
-              <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 -mr-1 -mt-1 rounded-tr"></div>
-              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 -ml-1 -mb-1 rounded-bl"></div>
-              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 -mr-1 -mb-1 rounded-br"></div>
-            </div>
-            
-            {/* 隱藏的 Canvas 用於擷取與影像處理 */}
-            <canvas ref={canvasRef} className="hidden" />
-          </div>
-
-          {/* 掃描按鈕 */}
-          <button
-            onClick={captureAndScan}
-            disabled={!tesseractReady || isScanning || !!cameraError}
-            className={`w-full py-4 rounded-xl flex items-center justify-center space-x-2 text-lg font-bold transition-all shadow-md
-              ${!tesseractReady || isScanning || !!cameraError 
-                ? 'bg-gray-200 text-gray-500 cursor-not-allowed' 
-                : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg active:scale-95'}`}
-          >
-            {isScanning ? (
-              <>
-                <RefreshCw className="w-6 h-6 animate-spin" />
-                <span>影像強化與辨識中...</span>
-              </>
-            ) : !tesseractReady ? (
-              <>
-                <RefreshCw className="w-6 h-6 animate-spin" />
-                <span>OCR 引擎載入中...</span>
-              </>
-            ) : (
-              <>
-                <Camera className="w-6 h-6" />
-                <span>掃描並解密</span>
-              </>
-            )}
-          </button>
-
-          {/* 結果與即時編輯區 */}
-          <div className="space-y-5 pt-2">
-            
-            {/* 金鑰輸入 */}
-            <div>
-              <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1.5 ml-1">
-                <KeyRound className="w-4 h-4 text-indigo-500" />
-                <span>偏移金鑰 (Shift Key)</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  value={shiftKey}
-                  onChange={(e) => setShiftKey(parseInt(e.target.value) || 0)}
-                  className="w-full p-3.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition font-mono text-lg shadow-sm"
-                  placeholder="例如: 11"
-                />
-              </div>
-            </div>
-
-            {/* 掃描到的密文 */}
-            <div>
-              <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1.5 ml-1">
-                <ScanText className="w-4 h-4 text-amber-500" />
-                <span>辨識密文 (Ciphertext) - 可手動修正</span>
-              </label>
-              <textarea
-                value={cipherText}
-                onChange={(e) => setCipherText(e.target.value)}
-                className="w-full p-3.5 bg-amber-50/50 border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition h-28 resize-none font-mono text-sm leading-relaxed shadow-sm text-gray-700"
-                placeholder="此處將顯示辨識出的密文..."
-              />
-            </div>
-
-            {/* 解密後的明文 */}
-            <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
-              <label className="flex items-center space-x-2 text-sm font-bold text-emerald-800 mb-3 ml-1">
-                <ShieldCheck className="w-5 h-5 text-emerald-600" />
-                <span>解密明文 (Plaintext)</span>
-              </label>
-              <div className="min-h-[4rem] font-mono text-emerald-950 whitespace-pre-wrap break-words text-lg leading-relaxed ml-1">
-                {plainText ? (
-                  plainText
-                ) : (
-                  <span className="text-emerald-600/40 italic text-base">等待掃描或輸入解密...</span>
-                )}
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+    // 網頁載入完成後自動開啟相機
+    document.addEventListener('DOMContentLoaded', () => {
+      startCamera();
+    });
+  </script>
+</body>
+</html>
