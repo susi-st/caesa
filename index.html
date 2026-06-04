@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, ScanText, KeyRound, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { Camera, ScanText, KeyRound, ShieldCheck, AlertCircle, RefreshCw, Settings2 } from 'lucide-react';
 
 export default function App() {
   const videoRef = useRef(null);
@@ -30,15 +30,20 @@ export default function App() {
     };
   }, []);
 
-  // 2. 初始化相機
+  // 2. 初始化相機 (請求高畫質)
   const startCamera = useCallback(async () => {
     setCameraError('');
     try {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
+      // 請求高解析度影像，有助於辨識像素字體與細節
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' } // 優先使用後置鏡頭
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        } 
       });
       setStream(mediaStream);
       if (videoRef.current) {
@@ -63,6 +68,7 @@ export default function App() {
   // 3. 凱薩密碼解密邏輯 (即時更新)
   useEffect(() => {
     const decrypt = (text, shift) => {
+      if (!text) return '';
       // 將 shift 限制在 0-25 之間，解密通常是減去偏移量
       const s = ((shift % 26) + 26) % 26; 
       
@@ -76,14 +82,14 @@ export default function App() {
         else if (code >= 97 && code <= 122) {
           return String.fromCharCode(((code - 97 - s + 26) % 26) + 97);
         }
-        return char; // 非英文字母不轉換
+        return char; // 非英文字母不轉換 (保留標點符號)
       }).join('');
     };
 
     setPlainText(decrypt(cipherText, shiftKey));
   }, [cipherText, shiftKey]);
 
-  // 4. 捕捉影像並進行 OCR
+  // 4. 捕捉影像、預處理並進行 OCR
   const captureAndScan = async () => {
     if (!videoRef.current || !canvasRef.current || !tesseractReady) return;
     
@@ -91,32 +97,53 @@ export default function App() {
     
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    
+    // 使用影片的實際高解析度作為 Canvas 尺寸
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     
     const ctx = canvas.getContext('2d');
+    
+    // 【核心優化】影像預處理濾鏡
+    // 套用灰階、超高對比度、些微提高亮度。這能消除背景雜訊(如素描紋理)並強化文字邊緣
+    ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // 重設濾鏡以免影響後續操作
+    ctx.filter = 'none';
     
     const imageDataUrl = canvas.toDataURL('image/png');
 
     try {
       const result = await window.Tesseract.recognize(
         imageDataUrl,
-        'eng', // 凱薩密碼主要是英文字母，使用英文模型即可
-        { logger: m => console.log(m) }
+        'eng',
+        { 
+          logger: m => {
+            if(m.status === 'recognizing text') {
+               // 可在此處獲取進度 m.progress
+            }
+          }
+        }
       );
 
       let text = result.data.text;
       
-      // 嘗試從文字中找出金鑰 (例如: KEY=3, K:5)
-      const keyMatch = text.match(/(?:key|k)\s*[:=]?\s*(-?\d+)/i);
+      // 【核心優化】嘗試從文字中找出金鑰，支援 (Key=11), KEY: 5, k=3 等格式
+      // 正規表達式解析: 允許開頭有括號，配對 key 或 k，接著冒號或等號，最後抓取數字，允許結尾括號
+      const keyMatch = text.match(/[\(]?(?:key|k)\s*[:=]\s*(-?\d+)[\)]?/i);
+      
       if (keyMatch) {
         setShiftKey(parseInt(keyMatch[1], 10));
-        // 將金鑰的部分從密文中移除，保持密文乾淨
-        text = text.replace(keyMatch[0], '').trim();
+        // 將包含金鑰的整段文字移除
+        text = text.replace(keyMatch[0], '');
       }
       
-      setCipherText(text.trim());
+      // 【核心優化】清理 OCR 常見的排版雜訊
+      // 將換行符號取代為空白，並移除多餘的連續空白，讓句子連續
+      text = text.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      
+      setCipherText(text);
 
     } catch (error) {
       console.error("OCR 錯誤:", error);
@@ -131,12 +158,14 @@ export default function App() {
       <div className="max-w-md mx-auto bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
         
         {/* Header */}
-        <div className="bg-indigo-600 p-5 text-white flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <ScanText className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wider">凱薩密文解密器</h1>
+        <div className="bg-slate-800 p-5 text-white flex items-center justify-between shadow-md relative z-10">
+          <div className="flex items-center space-x-3">
+            <div className="bg-indigo-500 p-2 rounded-lg">
+              <ScanText className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="text-xl font-bold tracking-wider">凱薩密文掃描器</h1>
           </div>
-          <button onClick={startCamera} className="p-2 hover:bg-indigo-500 rounded-full transition" title="重新啟動相機">
+          <button onClick={startCamera} className="p-2 hover:bg-slate-700 rounded-full transition" title="重新啟動相機">
             <RefreshCw className="w-5 h-5" />
           </button>
         </div>
@@ -144,13 +173,13 @@ export default function App() {
         <div className="p-5 space-y-6">
           
           {/* 提示訊息 */}
-          <div className="bg-blue-50 text-blue-800 p-3 rounded-lg text-sm flex items-start space-x-2">
-            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-            <p>建議在紙上寫上 <strong>KEY=數字</strong>，下方再寫上英文密文，程式會自動抓取金鑰。</p>
+          <div className="bg-indigo-50 text-indigo-800 p-3.5 rounded-xl text-sm flex items-start space-x-3 border border-indigo-100">
+            <Settings2 className="w-5 h-5 shrink-0 mt-0.5 text-indigo-600" />
+            <p className="leading-relaxed">系統已啟用<strong>高對比強化技術</strong>。請對準密文，程式將自動過濾背景雜訊並萃取 `(Key=數字)` 格式的金鑰。</p>
           </div>
 
           {/* 相機預覽區 */}
-          <div className="relative rounded-xl overflow-hidden bg-black aspect-[4/3] flex items-center justify-center shadow-inner">
+          <div className="relative rounded-xl overflow-hidden bg-black aspect-[4/3] flex items-center justify-center shadow-inner ring-1 ring-black/5">
             {cameraError ? (
               <div className="text-red-400 text-sm p-4 text-center">{cameraError}</div>
             ) : (
@@ -164,14 +193,14 @@ export default function App() {
             )}
             
             {/* 掃描框 UI 裝飾 */}
-            <div className="absolute inset-0 pointer-events-none border-2 border-white/20 m-6 rounded-lg">
+            <div className="absolute inset-0 pointer-events-none border border-white/30 m-8 rounded-lg shadow-[0_0_0_4000px_rgba(0,0,0,0.4)]">
               <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 -ml-1 -mt-1 rounded-tl"></div>
               <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 -mr-1 -mt-1 rounded-tr"></div>
               <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 -ml-1 -mb-1 rounded-bl"></div>
               <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 -mr-1 -mb-1 rounded-br"></div>
             </div>
             
-            {/* 隱藏的 Canvas 用於擷取畫面 */}
+            {/* 隱藏的 Canvas 用於擷取與影像處理 */}
             <canvas ref={canvasRef} className="hidden" />
           </div>
 
@@ -181,67 +210,74 @@ export default function App() {
             disabled={!tesseractReady || isScanning || !!cameraError}
             className={`w-full py-4 rounded-xl flex items-center justify-center space-x-2 text-lg font-bold transition-all shadow-md
               ${!tesseractReady || isScanning || !!cameraError 
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                ? 'bg-gray-200 text-gray-500 cursor-not-allowed' 
                 : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg active:scale-95'}`}
           >
             {isScanning ? (
               <>
                 <RefreshCw className="w-6 h-6 animate-spin" />
-                <span>正在辨識文字...</span>
+                <span>影像強化與辨識中...</span>
               </>
             ) : !tesseractReady ? (
               <>
                 <RefreshCw className="w-6 h-6 animate-spin" />
-                <span>引擎載入中...</span>
+                <span>OCR 引擎載入中...</span>
               </>
             ) : (
               <>
                 <Camera className="w-6 h-6" />
-                <span>掃描並辨識</span>
+                <span>掃描並解密</span>
               </>
             )}
           </button>
 
           {/* 結果與即時編輯區 */}
-          <div className="space-y-4 pt-4 border-t border-gray-100">
+          <div className="space-y-5 pt-2">
             
             {/* 金鑰輸入 */}
             <div>
-              <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1">
+              <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1.5 ml-1">
                 <KeyRound className="w-4 h-4 text-indigo-500" />
-                <span>偏移金鑰 (Shift)</span>
+                <span>偏移金鑰 (Shift Key)</span>
               </label>
-              <input
-                type="number"
-                value={shiftKey}
-                onChange={(e) => setShiftKey(parseInt(e.target.value) || 0)}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
-                placeholder="例如: 3"
-              />
+              <div className="relative">
+                <input
+                  type="number"
+                  value={shiftKey}
+                  onChange={(e) => setShiftKey(parseInt(e.target.value) || 0)}
+                  className="w-full p-3.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition font-mono text-lg shadow-sm"
+                  placeholder="例如: 11"
+                />
+              </div>
             </div>
 
             {/* 掃描到的密文 */}
             <div>
-              <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1">
-                <ScanText className="w-4 h-4 text-orange-500" />
-                <span>掃描密文 (可手動修正)</span>
+              <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-1.5 ml-1">
+                <ScanText className="w-4 h-4 text-amber-500" />
+                <span>辨識密文 (Ciphertext) - 可手動修正</span>
               </label>
               <textarea
                 value={cipherText}
                 onChange={(e) => setCipherText(e.target.value)}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition h-24 resize-none font-mono text-sm"
+                className="w-full p-3.5 bg-amber-50/50 border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition h-28 resize-none font-mono text-sm leading-relaxed shadow-sm text-gray-700"
                 placeholder="此處將顯示辨識出的密文..."
               />
             </div>
 
             {/* 解密後的明文 */}
-            <div className="bg-green-50 p-4 rounded-xl border border-green-100 shadow-sm">
-              <label className="flex items-center space-x-2 text-sm font-bold text-green-800 mb-2">
-                <ShieldCheck className="w-5 h-5 text-green-600" />
-                <span>解密明文 (即時結果)</span>
+            <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+              <label className="flex items-center space-x-2 text-sm font-bold text-emerald-800 mb-3 ml-1">
+                <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                <span>解密明文 (Plaintext)</span>
               </label>
-              <div className="min-h-[4rem] font-mono text-green-900 whitespace-pre-wrap break-words">
-                {plainText || <span className="text-green-600/50 italic">等待解密中...</span>}
+              <div className="min-h-[4rem] font-mono text-emerald-950 whitespace-pre-wrap break-words text-lg leading-relaxed ml-1">
+                {plainText ? (
+                  plainText
+                ) : (
+                  <span className="text-emerald-600/40 italic text-base">等待掃描或輸入解密...</span>
+                )}
               </div>
             </div>
 
